@@ -9,6 +9,24 @@ from app.mcp.client import call_tool
 from app.schemas.runs import AgentOutput, EvaluationDecision, HandoffDecision, RouteDecision, RunRequest, RunResult, SupervisorDecision, TraceEvent
 
 
+def format_exception(error: BaseException) -> str:
+    """ExceptionGroup 안의 실제 하위 오류까지 사용자에게 보여준다."""
+    messages: list[str] = []
+
+    def collect(current: BaseException) -> None:
+        if isinstance(current, BaseExceptionGroup):
+            for nested in current.exceptions:
+                collect(nested)
+            return
+        message = str(current).strip() or repr(current)
+        rendered = f"{type(current).__name__}: {message}"
+        if rendered not in messages:
+            messages.append(rendered)
+
+    collect(error)
+    return " | ".join(messages) or f"{type(error).__name__}: {error}"
+
+
 class PatternEngine:
     def __init__(self, request: RunRequest, provider_override: str | None = None):
         self.request = request
@@ -38,7 +56,7 @@ class PatternEngine:
         try:
             output, metadata = await run_agent(get_agent(agent_id), self.request.message, provider, context)
         except Exception as error:
-            self.trace(agent_id, "run", "failed", {"provider_used": provider, "model": model_for(provider)}, error=f"{type(error).__name__}: {error}")
+            self.trace(agent_id, "run", "failed", {"provider_used": provider, "model": model_for(provider)}, error=format_exception(error))
             raise
         self.result.selected_agents.append(agent_id)
         self.result.outputs[agent_id] = output.model_dump()
@@ -175,6 +193,6 @@ class PatternEngine:
         except Exception as error:
             self.result.status = "failed"
             self.result.termination_reason = "pattern_error"
-            self.result.error = f"{type(error).__name__}: {error}"
+            self.result.error = format_exception(error)
             self.trace("orchestrator", "pattern_failed", "failed", error=self.result.error)
         return self.result

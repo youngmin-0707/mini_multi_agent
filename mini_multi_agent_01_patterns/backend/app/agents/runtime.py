@@ -93,10 +93,16 @@ MCP Tool Result: {json.dumps(tool_results, ensure_ascii=False, default=str)}
 MCP Tool Result만 사실 근거로 사용하세요. 결과에 없는 구체적 사실은 생성하지 말고 확인 필요로 표시하세요.
 AgentOutput 계약으로 자신의 결과만 반환하세요. agent_id는 반드시 {profile.agent_id}입니다."""
     output, metadata = await generate_structured(provider, prompt, AgentOutput)
-    if output.agent_id != profile.agent_id:
-        raise ValueError(f"Agent 역할 불일치: expected={profile.agent_id}, actual={output.agent_id}")
+    reported_agent_id = output.agent_id
+    agent_id_corrected = reported_agent_id != profile.agent_id
+    if agent_id_corrected:
+        # 실행 주체와 Tool 권한은 이미 profile로 결정되어 있다. 모델이 이전
+        # Agent의 ID를 복사해도 파이프라인 전체를 실패시키지 않고 표시만 교정한다.
+        output.agent_id = profile.agent_id
     return output, {
         **metadata,
+        "agent_id_reported": reported_agent_id,
+        "agent_id_corrected": agent_id_corrected,
         "tools": sorted(invoked_tools),
         "skipped_tools": sorted(skipped_tools),
         "tool_results": tool_results,
