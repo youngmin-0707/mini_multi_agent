@@ -1,8 +1,4 @@
-"""알레르기 실습의 결정적인 Mock LLM 응답을 생성한다.
-
-Mock은 LLM 호출만 대체한다. 장소, 안전 지침과 품질 조건은 실제 MCP Tool
-결과를 입력으로 받아 사용하므로 Agent의 데이터 흐름은 real 모드와 같다.
-"""
+"""알레르기 실습의 고정 Tool Fixture를 받아 Mock Agent 응답을 생성한다."""
 
 from time import perf_counter
 
@@ -40,7 +36,6 @@ def generate_allergy_mock(
             "facts": [
                 {
                     "fact": f"{item['name']}: {item['category']}, {item['transit_note']}",
-                    "source": item["source_url"],
                 }
                 for item in places
             ],
@@ -48,10 +43,12 @@ def generate_allergy_mock(
                 {
                     "guidance": item["guidance"],
                     "emergency": item["emergency"],
-                    "source": item["source_url"],
                 }
                 for item in guidance
             ],
+            "scenario_title": tool_results.get("search_places", {}).get("scenario_title") or "부산 바다 나들이",
+            "food_suggestions": tool_results.get("search_places", {}).get("food_suggestions", []),
+            "daytime_caution": tool_results.get("search_places", {}).get("daytime_caution") or "",
             "completed": bool(places and guidance),
         }
     elif agent_id == "allergy_guide_writer_agent":
@@ -59,10 +56,11 @@ def generate_allergy_mock(
         revision = int(context_data.get("revision", 1))
         facts = research.get("facts", [])
         safety = research.get("safety_guidance", [])
-        sources = list(dict.fromkeys(
-            [item["source"] for item in facts] + [item["source"] for item in safety]
-        ))
-        place_text = "; ".join(item["fact"] for item in facts)
+        place_text = " · ".join(item["fact"].split(":", 1)[0] for item in facts)
+        food_lines = [
+            f"- {item['name']}: 알레르기 유발 의심 원재료 — {', '.join(item['suspected_ingredients'])}"
+            for item in research.get("food_suggestions", [])
+        ]
         normal_guidance = " ".join(
             item["guidance"] for item in safety if not item.get("emergency")
         )
@@ -70,19 +68,20 @@ def generate_allergy_mock(
             item["guidance"] for item in safety if item.get("emergency")
         )
         draft_parts = [
-            f"부산 방문 장소 정보: {place_text}",
-            normal_guidance,
-            f"출처: {', '.join(sources)}",
-            "게시 또는 사용 전에 사용자의 승인을 받아 주세요.",
+            f"### {research.get('scenario_title') or '부산 바다 나들이'} (가상 실습 예시)",
+            f"**가볼 곳** {place_text}",
+            f"**햇볕 주의** {research.get('daytime_caution') or '12~15시에는 햇볕이 강한 날 그늘에서 쉬세요.'}",
+            "**추천 음식과 확인할 재료**\n" + "\n".join(food_lines),
+            f"**주문 전 확인** 위 재료는 메뉴별 추정입니다. {normal_guidance}",
+            "**사용 전 확인** 안내문을 확인하고 승인해 주세요.",
         ]
-        requirements = ["source", "cross_contact", "approval"]
+        requirements = ["suspected_ingredients", "daytime", "cross_contact", "approval"]
         if revision >= 2:
-            draft_parts.insert(2, emergency_guidance)
+            draft_parts.insert(5, f"**응급 안내** {emergency_guidance}")
             requirements.append("emergency")
         payload = {
             "agent_id": agent_id,
-            "draft": "\n".join(part for part in draft_parts if part),
-            "used_sources": sources,
+            "draft": "\n\n".join(part for part in draft_parts if part),
             "included_requirements": requirements,
             "revision": revision,
         }

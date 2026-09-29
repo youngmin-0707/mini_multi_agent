@@ -29,15 +29,14 @@ class AllergySafetyGuideTests(unittest.IsolatedAsyncioTestCase):
 
         research = completed({
             "agent_id": "allergy_research_agent",
-            "facts": [{"fact": "부산박물관", "source": "place-source"}],
-            "safety_guidance": [{"guidance": "교차접촉 확인", "emergency": False, "source": "safety-source"}],
+            "facts": [{"fact": "해운대해수욕장"}],
+            "safety_guidance": [{"guidance": "교차접촉 확인", "emergency": False}],
             "completed": True,
         })
         draft_one = completed({
             "agent_id": "allergy_guide_writer_agent",
-            "draft": "출처와 교차접촉 안내",
-            "used_sources": ["place-source", "safety-source"],
-            "included_requirements": ["source", "cross_contact"],
+            "draft": "의심 원재료와 교차접촉 안내",
+            "included_requirements": ["suspected_ingredients", "cross_contact"],
             "revision": 1,
         })
         rejected = completed({
@@ -49,9 +48,8 @@ class AllergySafetyGuideTests(unittest.IsolatedAsyncioTestCase):
         })
         draft_two = completed({
             "agent_id": "allergy_guide_writer_agent",
-            "draft": "출처, 교차접촉, 119 신고, 사용자 승인 안내",
-            "used_sources": ["place-source", "safety-source"],
-            "included_requirements": ["source", "cross_contact", "emergency", "approval"],
+            "draft": "의심 원재료, 교차접촉, 119 신고, 사용자 승인 안내",
+            "included_requirements": ["suspected_ingredients", "cross_contact", "emergency", "approval"],
             "revision": 2,
         })
         passed = completed({
@@ -79,10 +77,10 @@ class AllergySafetyGuideTests(unittest.IsolatedAsyncioTestCase):
         """Mock Writer가 1차에는 119를 누락하고 2차에는 보완하는지 확인한다."""
 
         research = {
-            "facts": [{"fact": "부산박물관", "source": "place-source"}],
+            "facts": [{"fact": "해운대해수욕장"}],
             "safety_guidance": [
-                {"guidance": "교차접촉을 확인한다.", "emergency": False, "source": "safety-source"},
-                {"guidance": "중증 증상은 119에 신고한다.", "emergency": True, "source": "emergency-source"},
+                {"guidance": "교차접촉을 확인한다.", "emergency": False},
+                {"guidance": "중증 증상은 119에 신고한다.", "emergency": True},
             ],
         }
         first, _ = generate_allergy_mock(
@@ -100,6 +98,41 @@ class AllergySafetyGuideTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("119", first.draft)
         self.assertIn("119", second.draft)
+
+    async def test_allergy_flow_uses_only_fixtures(self) -> None:
+        """알레르기 흐름은 MCP·DB·LLM을 호출하지 않는다."""
+
+        with patch("app.agents.runtime.call_tool", side_effect=AssertionError("MCP called")), patch(
+            "app.agents.runtime.generate_structured", side_effect=AssertionError("LLM called")
+        ), patch(
+            "mcp_server.tools.travel_tools.db.find_quality_requirements", side_effect=AssertionError("DB called")
+        ):
+            result = await run_allergy_safety_guide(
+                AllergySafetyRequest(message="부산의 알레르기 안전 수칙을 안내해 줘.")
+            )
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.revision_count, 2)
+        self.assertIn("119에 신고", result.final_guide)
+
+    async def test_two_mock_requests_get_distinct_concise_guides(self) -> None:
+        """두 요청은 서로 다른 장소·메뉴를 선택하고 출처 URL을 노출하지 않는다."""
+
+        cases = (
+            ("부산에서 바다 근처 가볼 만한 장소와 음식도 추천해 줘.", "해운대해수욕장", "물회", "광안리해수욕장"),
+            ("부산 광안리에서 산책할 장소와 먹을 만한 음식을 추천해 줘.", "광안리해수욕장", "해물파전", "해운대해수욕장"),
+        )
+        for message, place, food, other_place in cases:
+            with self.subTest(message=message):
+                result = await run_allergy_safety_guide(AllergySafetyRequest(message=message))
+                self.assertEqual(result.status, "completed")
+                self.assertEqual(result.revision_count, 2)
+                self.assertIn(place, result.final_guide)
+                self.assertIn(food, result.final_guide)
+                self.assertNotIn(other_place, result.final_guide)
+                self.assertIn("알레르기 유발 의심 원재료", result.final_guide)
+                self.assertIn("12~15시", result.final_guide)
+                self.assertIn("교차접촉", result.final_guide)
+                self.assertNotIn("http", result.final_guide)
 
 
 if __name__ == "__main__":

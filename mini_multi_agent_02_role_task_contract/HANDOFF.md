@@ -1,429 +1,171 @@
 # 부산 알레르기 안전 안내문 실습 Handoff
 
-## 1. 작업 목적
+최종 정리: 2026-09-29
 
-`mini_multi_agent_01_patterns/SCENARIO.md`의 부산 알레르기 안전 안내문 시나리오를 `mini_multi_agent_02_role_task_contract` 프로젝트에 구현한다.
+## 1. 현재 목표와 동작
 
-핵심 학습 목표는 다음과 같다.
+이 프로젝트는 Research → Writer → Reviewer의 역할 분리와 출력 계약,
+검토 실패 후 재작성 과정을 학습하는 실습이다.
+알레르기 안내문은 **두 가지 가상 시나리오의 고정 Mock 데이터**로 동작한다.
 
-- Research, Writer, Reviewer Agent의 역할 분리
-- 역할별 Pydantic Output Contract 검증
-- 검증된 Context만 다음 Agent에 전달
-- Reviewer 실패 시 Writer 재작성
-- 최대 3회 반복과 명시적인 종료 사유
-- MCP, PostgreSQL, Router와 Swagger 연결
-- `LLM_MODE=mock | real` 전환
+- 알레르기 Agent는 LLM, MCP 서버, PostgreSQL을 호출하지 않는다.
+- 사진 업로드 및 이미지 분석 기능은 제거했다. 입력은 텍스트 요청이다.
+- `LLM_MODE` 설정을 제거했다. 알레르기 Agent ID를 기준으로 Mock을 사용한다.
+- 다른 Lab의 Provider 및 MCP 기능은 별도로 유지한다.
+- 학습용 가상 데이터이므로 최종 안내문과 Research/Draft 계약에 출처 URL을 요구하지 않는다.
+- 실제 매장 메뉴, 원재료, 날씨를 확인한 결과가 아니다.
 
-## 2. 현재 구현 상태
+## 2. 두 가지 요청 예시
 
-구현된 전체 흐름은 다음과 같다.
+| 구분 | 요청 | 장소 | 추천 메뉴 |
+| --- | --- | --- | --- |
+| 해운대 | 부산에서 바다 근처 가볼 만한 장소와 음식도 추천해 줘. | 해운대해수욕장, 동백섬 산책로 | 물회, 밀면 |
+| 광안리 | 부산 광안리에서 산책할 장소와 먹을 만한 음식을 추천해 줘. | 광안리해수욕장, 민락수변공원 | 해물파전, 어묵 |
 
-```text
-사용자 요청
-  → Allergy Research Agent
-  → AllergyResearchResult 검증
-  → Allergy Guide Writer Agent
-  → AllergyGuideDraftResult 검증
-  → Allergy Guide Reviewer Agent
-  ├─ 통과 → 최종 안내문 반환
-  └─ 실패 → 피드백과 함께 Writer 재실행
-               └─ 최대 3회
-```
+음식별 알레르기 유발 의심 원재료도 고정 데이터로 제공한다.
 
-현재 완료된 항목:
+- 물회: 생선, 조개류, 양념의 대두·밀 성분
+- 밀면: 밀, 달걀, 육수의 대두 성분
+- 해물파전: 밀, 달걀, 새우·조개류
+- 어묵: 생선, 밀, 대두
 
-- 알레르기 시나리오용 Agent 3개 정의
-- Agent Registry 등록
-- 역할별 출력 계약과 전체 실행 결과 계약 작성
-- 학습용 독스트링 추가
-- PostgreSQL 테이블과 Seed SQL 작성
-- 알레르기 관련 MCP Tool 4개 작성 및 등록
-- 알레르기 Agent 전용 Mock Provider 작성
-- `LLM_MODE=mock | real` 분기 연결
-- 최대 3회 Evaluator–Reviser Orchestration 작성
-- Router URL 추가
-- 계약 및 Orchestration 단위 테스트 작성
-- Swagger에서 API 실행 확인
+이 목록은 메뉴별 추정 예시다. 실제 원재료와 교차접촉 가능성을
+주문 전에 매장에 직접 확인하도록 안내한다.
 
-## 3. 주요 파일
+## 3. 최종 안내문 구성
 
-### 설계 문서
+긴 한 문단 대신 제목과 짧은 항목, 음식별 목록으로 표시한다.
 
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\ASSIGNMENT_PLAN.md
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\SCENARIO_AGENT_CONTRACT_PLAN.md
-```
+1. 제목과 `가상 실습 예시` 표시
+2. 가볼 곳
+3. 햇볕 주의: `12~15시에 햇볕이 강한 날에는 장시간 물놀이를 피하고 그늘에서 쉬세요.`
+4. 추천 음식과 알레르기 유발 의심 원재료
+5. 주문 전 실제 원재료 및 교차접촉 확인
+6. 중증 알레르기 증상이 의심되면 119 신고 안내
+7. 사용 전 사용자 확인·승인 문구
 
-### Output Contract
+햇볕 주의 문구는 실습용 조건부 안내이며 실시간 일조량 판정이 아니다.
+사진을 요청하는 문구와 출처 링크 목록은 표시하지 않는다.
+
+## 4. 실행 흐름과 계약
 
 ```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\allergy_contracts.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\contracts.py
+텍스트 요청
+ → Research: Mock 장소·음식·안전 수칙 조회
+ → Research 계약 검증
+ → Writer: 안내문 작성
+ → Draft 계약 검증
+ → Reviewer: 필수 조건 확인
+   ├─ 실패: 피드백을 Writer에 전달하여 재작성
+   └─ 통과: 최종 안내문과 실행 기록 반환
 ```
 
-추가된 주요 모델:
+- 정상 예시는 1차 초안에서 응급 안내를 의도적으로 누락한다.
+- Reviewer가 누락을 찾으면 2차 초안에 119 신고 문구를 추가해 통과한다.
+- 최대 작성 횟수는 3회다.
+- 정상 결과: `status=completed`, `termination_reason=evaluation_passed`, `revision_count=2`.
+- 필수 조건은 의심 원재료, 12~15시 안내, 교차접촉, 119 신고, 승인 문구의 5개다.
+- URL 속 숫자나 단순 `119` 문자열만으로 응급 안내가 통과하지 않도록 검사한다.
+- `FoodSuggestion`에 메뉴명과 의심 원재료를 구조화했다.
+- Research에는 `scenario_title`, `food_suggestions`, `daytime_caution`이 포함된다.
+- Research의 개별 `source`와 Draft의 `used_sources` 필드는 제거했다.
+- Mock Tool의 `source: mock`은 내부 실행 메타데이터다.
 
-- `ResearchFact`
-- `SafetyGuidance`
-- `AllergyResearchResult`
-- `AllergyGuideDraftResult`
-- `AllergyGuideReviewResult`
-- `AllergySafetyRequest`
-- `AllergyTraceEvent`
-- `AllergySafetyRunResult`
+## 5. 주요 파일
 
-### Agent
+경로는 이 프로젝트 폴더 기준이다.
 
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\agents\allergy_research_agent.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\agents\allergy_guide_writer_agent.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\agents\allergy_guide_reviewer_agent.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\agents\registry.py
+| 파일 | 역할 |
+| --- | --- |
+| `ASSIGNMENT_PLAN.md` | 과제 계획, 사용 방법, Mock 범위 |
+| `frontend/app.py` | 두 요청 선택, 실행, 안내문 및 Agent 기록 표시 |
+| `backend/app/providers/allergy_data_mock.py` | 장소·음식·수칙·검토 조건 Fixture |
+| `backend/app/providers/allergy_mock.py` | Research/Writer/Reviewer 고정 응답 생성 |
+| `backend/app/agents/runtime.py` | 알레르기 Agent의 Mock 분기 및 시나리오 선택 |
+| `backend/app/agents/allergy_*_agent.py` | 각 Agent의 역할 정의 |
+| `backend/app/schemas/allergy_contracts.py` | 입력·출력 계약 |
+| `backend/app/orchestration/allergy_safety_guide.py` | 계약 검증 및 재작성 흐름 |
+| `tests/test_allergy_contracts.py` | 계약 검증 테스트 |
+| `tests/test_allergy_safety_guide.py` | 시나리오·재작성·외부 호출 차단 검증 |
+| `tests/test_allergy_required_terms.py` | 기존 MCP 필수 문구 검사 회귀 테스트 |
+
+## 6. 해결한 오류
+
+- **화면 `KeyError: '12'`**: 알레르기 메뉴 이름과 분기 조건을 공통 상수로 맞췄다.
+- **backend 폴더 실행 시 import 오류**: Mock Provider의 `mcp_server` import 의존성을 제거했다.
+  Mock 필수 문구 검사는 backend 내부에서 수행한다.
+- **URL의 119 숫자로 검토 통과**: URL을 제외하고 실제 `119 신고` 표현을 검사한다.
+- **광안리 요청의 도시 추출 오류**: 부산 요청은 도시를 부산으로 설정하고,
+  광안리·민락 키워드로 광안리 Fixture를 선택한다.
+- **안내문 가독성**: Markdown 제목, 빈 줄, 메뉴별 목록으로 구성했다.
+
+## 7. 실행 방법
+
+프로젝트 루트에서 기존 가상환경을 사용한다.
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
-Agent ID:
+가상환경 활성화 후 `backend` 폴더에서 실행해도 된다.
 
-- `allergy_research_agent`
-- `allergy_guide_writer_agent`
-- `allergy_guide_reviewer_agent`
-
-### Runtime과 Mock Provider
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\agents\runtime.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\providers\allergy_mock.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\core\config.py
+```bash
+uvicorn app.main:app --reload
 ```
 
-Mock 동작 설계:
+별도 터미널에서 프로젝트 루트 기준:
 
-- Research Fixture는 MCP 장소와 안전 지침을 구조화한다.
-- Writer 1차 Fixture는 의도적으로 119 응급 안내를 누락한다.
-- Reviewer가 실패하면 Writer 2차 Fixture가 응급 안내를 추가한다.
-- Mock과 Real은 같은 Pydantic 계약을 사용한다.
-- 기본 설정은 `LLM_MODE=mock`이다.
-
-### MCP와 PostgreSQL
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\mcp_server\tools\travel_tools.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\mcp_server\database\travel_queries.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\mcp_server\database\schema.sql
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\mcp_server\main.py
+```bash
+.venv/bin/python -m streamlit run frontend/app.py
 ```
 
-추가된 MCP Tool:
+화면에서 `12.부산 알레르기 · Mock 안내문`을 선택하고 요청 예시를 고른 뒤 실행한다.
+알레르기 실습에는 DB나 MCP 서버를 시작할 필요가 없다.
 
-- `get_allergy_guidance`
-- `get_quality_requirements`
-- `check_required_terms`
-- 기존 `search_places` 재사용
-
-추가된 PostgreSQL 테이블:
-
-- `mini_multi_agent_02.allergy_guidance`
-- `mini_multi_agent_02.quality_requirements`
-
-### Orchestration과 Router
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\orchestration\allergy_safety_guide.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\routers\contracts.py
-```
-
-추가된 API:
-
-```text
-POST /api/runs/allergy-safety-guide
-```
-
-### 테스트
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\tests\test_allergy_contracts.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\tests\test_allergy_safety_guide.py
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\tests\test_runtime.py
-```
-
-## 4. 설정
-
-`.env.example`에 다음 설정이 추가되어 있다.
-
-```dotenv
-LLM_MODE=mock
-```
-
-동작 방식:
-
-- `LLM_MODE=mock`: 알레르기 Agent만 외부 LLM 대신 결정적인 Fixture 사용
-- `LLM_MODE=real`: 각 Agent Profile에 지정된 기존 Provider 사용
-- PostgreSQL과 MCP 조회는 두 모드 모두 실제 경로 사용
-
-실제 `.env`의 API Key, 데이터베이스 비밀번호 등 비밀값은 이 문서에 기록하지 않는다. 다른 컴퓨터에서는 기존 `.env.example`을 참고해 `.env`를 별도로 준비해야 한다.
-
-## 5. 다른 컴퓨터에서 준비할 것
-
-1. 프로젝트 전체 파일을 복사하거나 Git으로 가져온다.
-2. Python 가상환경을 새로 만든다. 기존 `.venv`는 컴퓨터별 절대경로를 포함할 수 있으므로 복사해서 재사용하지 않는 것이 안전하다.
-3. `requirements.txt`를 설치한다.
-4. `.env.example`을 참고하여 `.env`를 준비한다.
-5. PostgreSQL과 Redis를 실행한다.
-6. 데이터베이스 Schema와 Seed를 적용한다.
-7. 테스트를 실행한다.
-8. MCP 서버와 Backend를 실행한다.
-9. Swagger에서 API를 호출한다.
-
-### 권장 환경 준비 명령
-
-프로젝트 루트에서 실행한다.
-
-```powershell
-cd C:\mini_multi_agent\mini_multi_agent_02_role_task_contract
-
-python -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-## 6. 데이터베이스 초기화
-
-반드시 프로젝트 루트에서 실행한다. 상위 폴더에서 실행하면 `mcp_server`를 찾지 못한다.
-
-```powershell
-cd C:\mini_multi_agent\mini_multi_agent_02_role_task_contract
-python -m mcp_server.database.init_db
-```
-
-정상 메시지:
-
-```text
-mini_multi_agent_02 Schema와 Seed 데이터 준비가 완료됐습니다.
-```
-
-## 7. 테스트 실행
-
-```powershell
-cd C:\mini_multi_agent\mini_multi_agent_02_role_task_contract
-.\.venv\Scripts\Activate.ps1
-python -m unittest discover -s tests -v
-```
-
-이전 컴퓨터에서는 한때 `.venv`가 존재하지 않는 Python 경로를 가리켜 테스트를 실행하지 못했다. 이후 사용자가 가상환경을 활성화하여 DB 초기화 명령을 실행할 수 있었으므로, 새 컴퓨터에서는 가상환경을 새로 생성한 뒤 전체 테스트를 다시 실행해야 한다.
-
-## 8. 서버 실행
-
-### Terminal 1 MCP 서버
-
-```powershell
-cd C:\mini_multi_agent\mini_multi_agent_02_role_task_contract
-.\.venv\Scripts\Activate.ps1
-python -m mcp_server.main
-```
-
-기본 MCP URL:
-
-```text
-http://127.0.0.1:8010/mcp
-```
-
-### Terminal 2 Backend
-
-```powershell
-cd C:\mini_multi_agent\mini_multi_agent_02_role_task_contract
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --app-dir backend --reload --port 8000
-```
-
-Swagger:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-MCP 상태 확인:
-
-```text
-http://127.0.0.1:8000/api/mcp-status
-```
-
-## 9. Swagger 요청
-
-Swagger에서 다음 API를 실행한다.
-
-```text
-POST /api/runs/allergy-safety-guide
-```
-
-Request Body:
+API는 `POST /api/runs/allergy-safety-guide`이며 요청 예시는 다음과 같다.
 
 ```json
-{
-  "message": "부산의 장소와 알레르기 안전 수칙을 조사하고 안내문을 작성한 뒤 필수 내용을 검토해 줘."
-}
+{"message": "부산 광안리에서 산책할 장소와 먹을 만한 음식을 추천해 줘."}
 ```
 
-## 10. 현재 Swagger 확인 결과
+사진용 `/api/runs/allergy-safety-guide/photo` 경로는 제거되어 404를 반환한다.
 
-API 연결, PostgreSQL 조회, MCP Tool 호출, 세 Agent 실행, 계약 검증과 Trace 반환은 성공했다.
+## 8. 데이터베이스 작업 이력
 
-확인된 응답의 주요 값:
+Mock 전환 전에 기존 DB/MCP 경로도 보완했다.
 
-```json
-{
-  "status": "completed",
-  "termination_reason": "evaluation_passed",
-  "revision_count": 1
-}
-```
+- `allergy_sources` 출처 테이블과 안전 지침의 출처 연결 컬럼을 추가했다.
+- `travel_queries.py`는 기존 DB 조회 시 출처 메타데이터를 함께 반환한다.
+- `quality_requirements`에 검사 유형을 추가했다.
+- 당시 로컬 DB 초기화를 두 차례 실행하여 중복 적재 없이
+  출처 3건, 안전 지침 3건, 품질 조건 4건을 확인했다.
+- 이 DB 데이터와 MCP 코드는 보존했다. 현재 알레르기 안내문은 이를 조회하지 않는다.
+- 현재 Mock 품질 조건은 5개이므로 기존 DB의 4개와 다르다.
+- 위 건수는 이전 적재 당시 기록이며 이번 문서 정리에서 DB를 다시 조회하지 않았다.
 
-Research 결과에는 다음 응급 지침이 존재했다.
+`.env`는 사용자가 직접 수정한 로컬 설정이며 Git 커밋 대상에서 제외한다.
+`.env.example`은 공유용 예시다. DB를 다시 사용하는 경우 backend와 MCP의
+DB 접속 설정 및 비밀번호를 별도로 확인해야 한다.
 
-```text
-중증 알레르기 증상이 의심되면 즉시 119에 신고한다.
-```
+## 9. 검증 기록
 
-그러나 Writer 1차 안내문에는 해당 응급 문장이 포함되지 않았다. 그럼에도 Reviewer가 1차 초안을 통과시켰다.
+최근 구현 검증:
 
-## 11. 반드시 수정해야 할 현재 버그
+- `python -m unittest discover -s tests -q`: 40개 테스트 통과
+- `python -m compileall -q backend frontend tests`: 통과
+- `git diff --check`: 통과
+- backend 작업 디렉터리에서 TestClient로 두 요청 모두 HTTP 200,
+  `completed`, 작성 2회 확인
+- 사진 경로 404 및 Research 개별 출처 필드 제거 확인
+- 테스트에서 외부 LLM/MCP/DB 호출 없이 Mock 흐름이 실행되는지 확인
 
-### 증상
+브라우저 화면의 수동 시각 검증과 실제 LLM 호출 검증은 수행하지 않았다.
 
-Mock 시나리오는 1차 Writer가 119 응급 안내를 누락하고, Reviewer가 실패시킨 뒤 2차 Writer가 보완하도록 설계되었다.
+## 10. 다음 작업 시 주의사항
 
-기대 결과:
-
-```json
-{
-  "status": "completed",
-  "termination_reason": "evaluation_passed",
-  "revision_count": 2
-}
-```
-
-실제 결과:
-
-```json
-{
-  "status": "completed",
-  "termination_reason": "evaluation_passed",
-  "revision_count": 1
-}
-```
-
-### 원인
-
-`check_required_terms`는 초안 전체에서 필수 문자열 `119`가 있는지만 검사한다.
-
-1차 안내문의 출처 목록에 다음 URL이 포함된다.
-
-```text
-https://www.119.go.kr/
-```
-
-따라서 실제 응급 신고 문장이 없어도 URL 안의 `119`를 발견하여 조건을 통과시키는 false positive가 발생한다.
-
-### 수정 대상
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\mcp_server\tools\travel_tools.py
-```
-
-대상 함수:
-
-```python
-check_required_terms
-```
-
-### 권장 수정 방향
-
-필수 조건을 검사하기 전에 URL을 제거한 본문을 사용한다.
-
-예시 개념:
-
-```python
-import re
-
-body_without_urls = re.sub(r"https?://\S+", "", draft)
-```
-
-그 후 `required_term`을 `body_without_urls`에서 검사한다.
-
-더 엄격하게 만들려면 단순 `119` 대신 다음과 같은 의미 있는 문구를 검사한다.
-
-```text
-119에 신고
-119 신고
-119로 신고
-```
-
-입문 실습 범위에서는 URL 제거 후 검사하는 방식이 가장 작은 수정이다.
-
-## 12. 버그 수정 후 확인할 Trace
-
-정상적인 Mock 실행에서는 다음 순서가 나타나야 한다.
-
-```text
-request_validated
-research started
-research_verified
-writer started revision 1
-draft_verified revision 1
-reviewer rejected revision 1
-writer started revision 2
-draft_verified revision 2
-reviewer passed revision 2
-evaluation_passed revision 2
-```
-
-확인할 최종 값:
-
-- `status == "completed"`
-- `termination_reason == "evaluation_passed"`
-- `revision_count == 2`
-- `final_review.passed == true`
-- `final_guide`에 교차접촉 안내가 있음
-- `final_guide`에 실제 119 신고 문장이 있음
-- `final_guide`에 출처가 있음
-- `final_guide`에 사용자 승인 요청이 있음
-
-## 13. 프론트엔드 상태
-
-현재 Streamlit 화면에는 알레르기 시나리오가 연결되어 있지 않다.
-
-현재 파일:
-
-```text
-C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\frontend\app.py
-```
-
-현재 화면은 기존 Lab 01~11만 지원하며 다음 API를 호출하지 않는다.
-
-```text
-POST /api/runs/allergy-safety-guide
-```
-
-따라서 현재 테스트 방법은 Swagger 또는 직접 API 호출이다. Reviewer 오탐 수정과 Backend 검증이 끝난 뒤 Streamlit에 별도 화면을 추가하는 것이 다음 확장 작업이다.
-
-## 14. 다음 작업 순서
-
-1. 새 컴퓨터에서 가상환경과 `.env`를 준비한다.
-2. 전체 자동 테스트를 실행한다.
-3. `check_required_terms`의 URL 오탐을 수정한다.
-4. MCP 서버를 재시작한다.
-5. Swagger에서 같은 요청을 다시 실행한다.
-6. `revision_count=2`와 재작성 Trace를 확인한다.
-7. 필요하면 최대 3회 실패와 Tool 오류 테스트를 추가한다.
-8. Backend 검증 완료 후 Streamlit 프론트 화면을 추가한다.
-
-## 15. 작업 시 주의사항
-
-- 기존 여행 Agent와 Lab 01~11 동작을 깨뜨리지 않는다.
-- Mock 분기는 `allergy_` Agent에만 적용한다.
-- Mock은 LLM 응답만 대체하며 MCP와 PostgreSQL은 실제 경로를 유지한다.
-- Agent의 결과는 반드시 Pydantic 계약을 통과시킨다.
-- Writer가 사용한 출처는 Research 결과의 출처와 Orchestrator에서 교차 검증한다.
-- Reviewer는 안내문을 직접 수정하지 않고 피드백만 반환한다.
-- 반복 횟수와 종료 조건은 Orchestrator가 관리한다.
-- `.env`의 API Key와 데이터베이스 비밀번호를 문서나 Git에 포함하지 않는다.
+- 현재 범위는 두 고정 시나리오다. 자유 입력을 이해하는 LLM 추천 기능이 아니다.
+- 광안리 또는 민락 키워드가 있으면 광안리, 그 외 기본 시나리오는 해운대다.
+- Reviewer의 필수 문구 검사는 규칙 기반이다. `unsupported_claims`의 빈 목록이
+  실제 사실 검증이나 의료적 안전성 검증을 뜻하지 않는다.
+- 실습 데이터를 바꿀 때 Fixture, 계약, 검토 조건, 테스트, `ASSIGNMENT_PLAN.md`를 함께 맞춘다.
+- 사용자가 요청한 Mock 전용 범위와 사진 기능 제거를 유지한다.

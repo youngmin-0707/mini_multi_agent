@@ -372,11 +372,13 @@ def show_task_message_lab() -> None:
 
 st.set_page_config(page_title="Mini Multi-Agent 02", page_icon="🧩", layout="wide")
 st.sidebar.title("🧩 Mini Multi-Agent 02")
+ALLERGY_MENU = "12.부산 알레르기 · Mock 안내문"
 MENU = [
     "과정 안내", "실행 환경 점검", "01 · Agent Role 정의", "02 · Task 분할",
     "03 · 입출력 계약", "04 · 역할별 계약", "05 · 계약 검증", "06 · 불완전 결과",
     "07 · 네 LLM 계약 실행", "08 · 검증 결과 전달", "09 · 다른 업무에 계약 적용",
     "10 · AgentTask 실제 실행", "11 · 날씨 → 장소 → 숙소 → 예산",
+    ALLERGY_MENU,
     "Contract Explorer", "Provider 상태", "MCP Tool",
 ]
 menu = st.sidebar.radio("학습 메뉴", MENU)
@@ -423,6 +425,35 @@ elif menu == "Contract Explorer":
     contracts = api_get("/api/contracts")
     selected = st.selectbox("Pydantic 계약", list(contracts))
     st.json(contracts[selected])
+elif menu == ALLERGY_MENU:
+    st.title("부산 알레르기 안전 안내문 · Mock")
+    st.write("가상 요청 두 가지 중 하나를 선택해 조사, 작성, 검토 흐름을 확인합니다.")
+    message = st.selectbox(
+        "사용자 요청 예시",
+        [
+            "부산에서 바다 근처 가볼 만한 장소와 음식도 추천해 줘.",
+            "부산 광안리에서 산책할 장소와 먹을 만한 음식을 추천해 줘.",
+        ],
+    )
+    if st.button("Mock 안내문 작성", disabled=not message.strip()):
+        try:
+            with st.spinner("Mock 안내문을 작성하고 검토하고 있습니다..."):
+                response = requests.post(
+                    f"{API}/api/runs/allergy-safety-guide",
+                    json={"message": message},
+                    timeout=180,
+                )
+                response.raise_for_status()
+                result = response.json()
+            if result["status"] == "completed":
+                st.success(f"검토 통과 · 작성 {result['revision_count']}회")
+                st.markdown(result["final_guide"])
+            else:
+                st.error(result.get("error") or "안내문 작성에 실패했습니다.")
+            with st.expander("Agent 실행 기록"):
+                st.dataframe(result["trace"], use_container_width=True)
+        except requests.RequestException as error:
+            st.error(f"API 실행 실패: {error}")
 else:
     lab_id = menu[:2]
     selected_example = show_header(lab_id, labs)

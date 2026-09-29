@@ -21,8 +21,39 @@
 | 사용자 요청 | 부산의 장소와 알레르기 안전 수칙을 조사하고 안내문을 작성한 뒤 필수 내용을 검토해 줘. |
 | 주요 패턴 | Sequential + Evaluator–Reviser |
 | 데이터 근거 | 부산 장소, 알레르기 지침, 안내문 품질 조건 |
-| 완료 결과 | 검토를 통과한 안내문, 출처, 사용자 승인 요청, 실행 Trace |
+| 완료 결과 | 검토를 통과한 가상 안내문, 사용자 승인 요청, 실행 Trace |
 | 최대 수정 횟수 | 3회 |
+
+### 가상 데이터의 저장 방식
+
+이 실습은 RAG를 사용하지 않는다. 알레르기 안내 흐름은 고정된 Mock 장소·지침·품질
+조건과 Mock Agent 응답을 사용한다. PostgreSQL, MCP, 외부 LLM을 호출하지 않으며
+같은 입력에서 같은 결과를 재현한다. 다른 실습의 실제 데이터
+연결에는 영향을 주지 않는다.
+
+| 데이터 | Mock Fixture | 근거와 사용 범위 |
+| --- | --- | --- |
+| 두 나들이 예시 | `SCENARIOS` | 해운대·광안리별 장소와 음식, 알레르기 유발 의심 원재료를 제공한다. |
+| 안전 지침 | `GUIDANCE` | 교차접촉 확인과 응급 신고 문구를 제공한다. |
+| 안내문 조건 | `REQUIREMENTS` | 이 과제의 통과 기준과 검사 유형을 제공한다. |
+
+세 Fixture는 `backend/app/providers/allergy_data_mock.py`에 있다. 기존 PostgreSQL
+테이블은 삭제하지 않지만 이 알레르기 흐름에서는 조회하지 않는다.
+
+이 데이터는 학습용 가상 예시다. 음식의 실제 원재료, 업소의 조리 환경, 당일
+일조량이나 물놀이 여건을 확인한 결과로 사용하지 않는다.
+
+### Mock 안내문 실행 방법
+
+Streamlit의 **12.부산 알레르기 · Mock 안내문** 메뉴에서 두 요청 예시 중 하나를 선택하고
+**Mock 안내문 작성**을 누른다. Swagger에서는
+`POST /api/runs/allergy-safety-guide`에 `message`를 담은 JSON을 보낸다.
+해운대 요청은 해운대해수욕장·동백섬 산책로와 물회·밀면, 광안리 요청은
+광안리해수욕장·민락수변공원과 해물파전·어묵으로 응답한다. 각 음식에는
+알레르기 유발 의심 원재료를 표시하고 실제 재료·교차접촉 여부를 매장에 확인하도록
+안내한다. 12~15시 햇볕 주의는 가상 예시 문구이며 실시간 날씨 판단이 아니다.
+출처 URL과 사진 입력은 최종 안내문에 포함하지 않는다. 장소·지침·품질 조건과
+Agent 출력은 모두 코드의 고정 Fixture에서 생성된다.
 
 최종 목표는 다음 흐름을 재현하는 것이다.
 
@@ -51,7 +82,7 @@
 ### 3.1 Allergy Research Agent
 
 **식별자:** `allergy_research_agent`  
-**목표:** Writer가 추측 없이 안내문을 작성할 수 있도록 출처가 있는 조사 자료를 준비한다.
+**목표:** Writer가 가상 Fixture 밖의 내용을 만들지 않도록 장소·메뉴·지침을 구조화한다.
 
 **입력**
 
@@ -62,7 +93,7 @@
 **수행할 일**
 
 - Tool Result에 존재하는 장소와 지침만 선택한다.
-- 모든 사실과 안전 지침에 출처를 연결한다.
+- 요청에 맞는 해운대 또는 광안리 Fixture와 메뉴 후보를 선택한다.
 - 응급 상황과 관련된 지침을 구분한다.
 - 결과를 `AllergyResearchResult` 구조로 반환한다.
 
@@ -73,7 +104,7 @@
 - Tool에 없는 의학 정보나 장소 정보를 추가하지 않는다.
 - Writer나 Reviewer의 결정을 대신하지 않는다.
 
-**완료 조건:** 사실과 안전 지침이 각각 한 개 이상 존재하고 모든 항목에 출처가 있어야 한다. 조건을 충족하지 못하면 Writer를 실행하지 않는다.
+**완료 조건:** 장소 사실과 안전 지침이 각각 한 개 이상 있어야 한다. 조건을 충족하지 못하면 Writer를 실행하지 않는다.
 
 ### 3.2 Allergy Guide Writer Agent
 
@@ -89,9 +120,9 @@
 
 **수행할 일**
 
-- 조사 결과에 있는 사실과 출처만 사용한다.
+- 조사 결과에 있는 장소·메뉴와 의심 원재료만 사용한다.
 - 식재료·교차접촉 확인, 119 신고, 사용자 승인 요청을 초안에 반영한다.
-- 실제 사용한 출처와 반영한 요구사항을 별도 필드에 기록한다.
+- 반영한 요구사항을 별도 필드에 기록한다.
 - Reviewer의 피드백을 받은 경우 누락된 부분을 수정한다.
 - 결과를 `AllergyGuideDraftResult` 구조로 반환한다.
 
@@ -101,7 +132,7 @@
 - 자신의 초안을 스스로 통과 처리하지 않는다.
 - 예약, 연락, 게시와 같은 외부 행동을 수행하지 않는다.
 
-**완료 조건:** 비어 있지 않은 초안, 사용 출처, 반영 요구사항 및 1~3 범위의 수정 회차가 있어야 한다.
+**완료 조건:** 비어 있지 않은 초안, 반영 요구사항 및 1~3 범위의 수정 회차가 있어야 한다.
 
 ### 3.3 Allergy Guide Reviewer Agent
 
@@ -134,17 +165,17 @@
 
 Reviewer는 다음 조건을 모두 만족할 때만 안내문을 통과시킨다.
 
-1. 장소와 알레르기 안전 지침의 출처가 포함되어 있다.
-2. 방문 전에 식재료와 교차접촉 가능성을 직접 확인하도록 안내한다.
+1. 요청에 맞는 장소와 추천 음식의 알레르기 유발 의심 원재료가 있다.
+2. 12~15시 햇볕 주의와 실제 원재료·교차접촉 확인 안내가 있다.
 3. 중증 증상이 의심될 때 119에 신고하도록 안내한다.
 4. 안내문을 게시하거나 사용하기 전에 사용자 승인을 요청한다.
-5. 데이터에 없는 장소의 안전성이나 의학적 판단을 확정하지 않는다.
+5. 가상 Fixture에 없는 장소나 음식의 안전성을 확정하지 않는다.
 
 하나라도 충족하지 못하면 `passed=false`와 함께 누락 조건 및 수정 피드백을 반환한다.
 
 ## 5. Output Contract 설계
 
-계약은 Agent가 반환해야 하는 데이터의 모양과 유효 조건을 정의한다. LLM 응답은 해당 Pydantic 모델의 검증을 통과한 경우에만 다음 단계에서 사용할 수 있다.
+계약은 Agent가 반환해야 하는 데이터의 모양과 유효 조건을 정의한다. Mock 응답은 해당 Pydantic 모델의 검증을 통과한 경우에만 다음 단계에서 사용할 수 있다.
 
 구현 파일은 다음과 같이 분리한다.
 
@@ -159,10 +190,9 @@ C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\a
 | 모델 | 필드 | 의미 |
 | --- | --- | --- |
 | `ResearchFact` | `fact: str` | 조사된 장소 또는 관련 사실 |
-|  | `source: str` | 해당 사실의 출처 |
 | `SafetyGuidance` | `guidance: str` | 알레르기 안전 행동 지침 |
 |  | `emergency: bool` | 응급 상황 안내 여부 |
-|  | `source: str` | 해당 지침의 출처 |
+| `FoodSuggestion` | `name: str`, `suspected_ingredients: list[str]` | 추천 메뉴와 확인할 원재료 후보 |
 
 ### 5.2 AllergyResearchResult
 
@@ -174,12 +204,14 @@ C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\a
 | `agent_id` | 고정 문자열 | `allergy_research_agent`만 허용 | 결과 생성자 확인 |
 | `facts` | `list[ResearchFact]` | 1~10개 | 안내문에 사용할 장소와 사실 |
 | `safety_guidance` | `list[SafetyGuidance]` | 1~10개 | 안전 수칙과 응급 안내 작성 |
+| `food_suggestions` | `list[FoodSuggestion]` | 최대 4개 | 메뉴별 확인할 원재료 작성 |
+| `daytime_caution` | `str` | 가상 주의 문구 | 12~15시 안내 작성 |
 | `completed` | `bool` | 근거가 준비된 경우에만 `true` | Writer 실행 가능 여부 판단 |
 
 **계약 검증 규칙**
 
 - 사실과 안전 지침은 각각 한 개 이상이어야 한다.
-- 각 항목의 내용과 출처는 빈 문자열일 수 없다.
+- 각 사실과 지침의 내용은 비어 있을 수 없다.
 - 필요한 근거 없이 `completed=true`인 결과는 거부한다.
 - `completed=false`이면 Orchestrator가 Writer 실행을 중단한다.
 
@@ -192,15 +224,14 @@ C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\a
 | --- | --- | --- | --- |
 | `agent_id` | 고정 문자열 | `allergy_guide_writer_agent`만 허용 | 결과 생성자 확인 |
 | `draft` | `str` | 빈 문자열 금지 | Reviewer가 검사할 안내문 |
-| `used_sources` | `list[str]` | 1~10개 | 조사 출처 사용 여부 확인 |
 | `included_requirements` | `list[str]` | 최대 10개 | Writer가 반영했다고 보고한 조건 |
 | `revision` | `int` | 1~3 | 재작성 횟수 제한 확인 |
 
 **계약 검증 규칙**
 
-- 초안과 사용 출처가 반드시 있어야 한다.
+- 초안은 반드시 있어야 한다.
 - 수정 회차는 1, 2, 3 중 하나여야 한다.
-- `used_sources`가 Research 결과에 존재하는지는 Orchestrator가 교차 검증한다.
+- 수정 회차가 현재 실행 회차와 일치하는지는 Orchestrator가 검증한다.
 - 계약 통과는 내용 심사 통과를 의미하지 않는다. 최종 품질 판정은 Reviewer가 담당한다.
 
 ### 5.4 AllergyGuideReviewResult
@@ -242,23 +273,24 @@ C:\mini_multi_agent\mini_multi_agent_02_role_task_contract\backend\app\schemas\a
 | `evaluation_passed` | Reviewer 검토를 통과함 |
 | `research_failed` | 조사 결과가 없거나 완료되지 않음 |
 | `contract_rejected` | Agent 결과가 출력 계약을 위반함 |
-| `tool_error` | MCP Tool 또는 데이터 조회가 실패함 |
+| `tool_error` | Mock Tool 결과 생성이 실패함 |
 | `max_revisions_exceeded` | 세 번의 작성 후에도 검토를 통과하지 못함 |
 
 ## 6. Agent 간 Context 전달 계약
 
 | 전달 구간 | 선행 조건 | 다음 단계에 보장할 값 | 위반 시 처리 |
 | --- | --- | --- | --- |
-| Research → Writer | Research 계약 검증 완료 | 출처가 있는 사실과 안전 지침 | Writer를 실행하지 않고 `research_failed` 종료 |
-| Writer → Reviewer | Draft 계약 검증 완료 | 안내문, 사용 출처, 반영 조건, 수정 회차 | 해당 실행을 `contract_rejected`로 종료 |
+| Research → Writer | Research 계약 검증 완료 | 선택된 장소·메뉴와 안전 지침 | Writer를 실행하지 않고 `research_failed` 종료 |
+| Writer → Reviewer | Draft 계약 검증 완료 | 안내문, 반영 조건, 수정 회차 | 해당 실행을 `contract_rejected`로 종료 |
 | Reviewer → Writer | `passed=false` | 누락 조건, 근거 없는 주장, 수정 피드백 | 회차를 증가시켜 Writer 재실행 |
 | Reviewer → Final | `passed=true` | 누락 없는 최종 안내문 | `evaluation_passed`로 종료 |
 
 Context는 문자열 하나로 합치기보다 검증된 모델의 `model_dump()` 결과처럼 구조화된 데이터로 전달한다.
 
-## 7. MCP Tool 계획
+## 7. Mock Tool 결과 계획
 
-과제 목록에는 Agent, 계약, Orchestration, Router만 적혀 있지만, 이 시나리오에서 근거 기반 실행을 만들려면 MCP Tool도 함께 확인하거나 추가해야 한다.
+Agent가 사용하는 Tool 이름과 반환 형식은 유지한다. 알레르기 흐름에서는 Runtime이
+같은 형식의 Mock 결과를 반환하므로 MCP 서버에 접속하지 않는다.
 
 필요한 Tool은 다음과 같다.
 
@@ -269,7 +301,11 @@ Context는 문자열 하나로 합치기보다 검증된 모델의 `model_dump()
 | `get_quality_requirements` | Writer, Reviewer | 안내문 완료 조건 조회 |
 | `check_required_terms` | Reviewer | 초안의 필수 항목 포함 여부 검사 |
 
-Tool 또는 데이터베이스 조회가 실패하면 임의의 데이터로 대체하지 않는다. 실패는 Orchestrator가 `tool_error`로 기록하고 후속 Agent 실행을 중단해야 한다.
+`check_required_terms`는 URL을 제외한 본문을 검사한다. 응급 조건은 `119` 숫자만으로
+통과시키지 않고 `119에 신고`처럼 신고 행동이 포함되어야 통과시킨다. 검사 방식은
+Mock `REQUIREMENTS`의 `check_type`에 허용된 값으로 지정한다.
+
+Mock Tool 결과 생성이 실패하면 Orchestrator는 실패를 기록하고 후속 Agent 실행을 중단한다.
 
 Agent는 `allowed_tools`에 등록된 Tool만 호출할 수 있어야 한다.
 
@@ -373,7 +409,7 @@ Router의 책임은 요청을 받아 알레르기 안전 안내 Orchestration을
 - HTTP 요청이 정상적으로 처리되는가?
 - `status`가 `completed`인가?
 - `termination_reason`이 `evaluation_passed`인가?
-- 최종 안내문에 출처가 포함되어 있는가?
+- 최종 안내문에 요청에 맞는 장소·메뉴와 의심 원재료가 포함되어 있는가?
 - 식재료와 교차접촉 가능성 확인 안내가 있는가?
 - 중증 증상 발생 시 119 신고 안내가 있는가?
 - 게시 또는 사용 전 사용자 승인 요청이 있는가?
@@ -404,8 +440,9 @@ Swagger 수동 테스트와 별도로 `tests/`에 시나리오 테스트를 추�
 8. Research 계약 검증 실패 시 후속 Agent는 실행되지 않는다.
 9. 허용되지 않은 Tool 호출은 차단된다.
 10. 잘못된 Agent 출력은 Pydantic 계약에서 거부된다.
-11. Tool 또는 DB 오류가 실패 상태와 Trace에 남는다.
-12. 동일한 Mock 입력은 동일한 결과와 Trace를 만든다.
+11. Mock Tool 오류가 실패 상태와 Trace에 남는다.
+12. 알레르기 흐름이 DB·MCP·LLM을 호출하지 않는다.
+13. 동일한 Mock 입력은 동일한 결과와 Trace를 만든다.
 
 ## 13. 예상 파일 변경 목록
 
@@ -442,10 +479,10 @@ tests/
 ## 14. 구현 순서
 
 1. 기존 Agent Runtime, Registry, MCP Client와 테스트 구조를 확인한다.
-2. 시나리오에 필요한 MCP Tool과 데이터가 현재 프로젝트에 있는지 확인한다.
+2. 시나리오에 필요한 Mock 장소·지침·품질 조건 Fixture를 확인한다.
 3. 역할별 출력 계약과 전체 실행 결과 계약을 작성한다.
 4. 세 Agent를 작성하고 Registry에 등록한다.
-5. MCP Tool과 데이터 조회를 연결한다.
+5. 알레르기 Agent의 Tool 이름을 Mock 결과 생성기에 연결한다.
 6. 최대 3회의 Evaluator–Reviser 반복이 있는 Orchestration을 작성한다.
 7. Router에 전용 URL을 추가한다.
 8. 계약과 정상·실패·반복 흐름의 자동 테스트를 작성한다.

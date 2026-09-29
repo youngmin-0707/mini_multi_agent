@@ -45,20 +45,6 @@ def _failure_reason(agent_result: dict[str, object]) -> str:
     return "tool_error" if "MCP" in error or "Tool" in error else "contract_rejected"
 
 
-def _draft_sources_are_verified(
-    research: AllergyResearchResult,
-    draft: AllergyGuideDraftResult,
-) -> bool:
-    """Writer가 Research에 없는 출처를 새로 만들지 않았는지 확인한다."""
-
-    verified_sources = {
-        item.source for item in research.facts
-    } | {
-        item.source for item in research.safety_guidance
-    }
-    return set(draft.used_sources).issubset(verified_sources)
-
-
 async def run_allergy_safety_guide(
     request: AllergySafetyRequest,
 ) -> AllergySafetyRunResult:
@@ -94,6 +80,7 @@ async def run_allergy_safety_guide(
             error=str(error),
             trace=trace,
         )
+
 
     if not research.completed:
         _event(trace, "contract_guard", "research_incomplete")
@@ -147,8 +134,8 @@ async def run_allergy_safety_guide(
                 trace=trace,
             )
 
-        if draft.revision != revision or not _draft_sources_are_verified(research, draft):
-            error = "초안의 수정 회차 또는 사용 출처가 검증된 Context와 일치하지 않습니다."
+        if draft.revision != revision:
+            error = "초안의 수정 회차가 현재 실행 회차와 일치하지 않습니다."
             _event(trace, "contract_guard", "draft_rejected", revision, error)
             return AllergySafetyRunResult(
                 status="failed",

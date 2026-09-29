@@ -6,6 +6,7 @@ from app.agents.models import AgentProfile
 from app.core.config import settings
 from app.mcp.client import call_tool
 from app.providers.allergy_mock import generate_allergy_mock
+from app.providers.allergy_data_mock import mock_tool_result
 from app.providers.registry import ProviderExecutionError, generate_structured, model_for
 from app.schemas.contracts import CONTRACTS, LLM_RESPONSE_CONTRACTS
 
@@ -49,7 +50,14 @@ async def run_agent(profile: AgentProfile, message: str, context: object | None 
                 raise ValueError(f"{tool_name} 호출에 필요한 도시·기간·인원·예산 정보가 사용자 요청에 없습니다.")
             if tracker:
                 tracker.waiting(profile.agent_id, "tool_call", f"{tool_name} Tool을 호출하고 있습니다.", tool=tool_name)
-            tool_results[tool_name] = await call_tool(tool_name, arguments, profile.allowed_tools)
+            if profile.agent_id.startswith("allergy_"):
+                if tool_name in {"search_places", "get_allergy_guidance"} and "부산" in message:
+                    arguments["city"] = "부산"
+                if tool_name == "search_places":
+                    arguments["scenario_id"] = "gwangan" if "광안리" in message or "민락" in message else "haeundae"
+                tool_results[tool_name] = mock_tool_result(tool_name, arguments)
+            else:
+                tool_results[tool_name] = await call_tool(tool_name, arguments, profile.allowed_tools)
             if tracker:
                 tracker.advance(profile.agent_id, "tool_completed", f"{tool_name} Tool 호출이 완료되었습니다.", tool=tool_name, source=tool_results[tool_name].get("source"))
         response_schema = LLM_RESPONSE_CONTRACTS[profile.output_contract]
@@ -62,7 +70,7 @@ MCP Tool Result: {json.dumps(tool_results, ensure_ascii=False, default=str)}
 {profile.output_contract} JSON 계약으로 반환하세요."""
         if tracker:
             tracker.waiting(profile.agent_id, "llm_call", f"{profile.provider} LLM 응답을 기다리고 있습니다.", provider=profile.provider)
-        if profile.agent_id.startswith("allergy_") and settings.llm_mode == "mock":
+        if profile.agent_id.startswith("allergy_"):
             draft, metadata = generate_allergy_mock(
                 profile.agent_id,
                 response_schema,

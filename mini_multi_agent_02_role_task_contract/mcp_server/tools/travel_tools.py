@@ -1,3 +1,5 @@
+import re
+
 from mcp_server.core.config import TRAVEL_DATA_SOURCE, WEATHER_DATA_SOURCE
 from mcp_server.database import travel_queries as db
 from mcp_server.weather.client import get_live_weather
@@ -32,12 +34,28 @@ def check_required_terms(draft: str, scenario: str) -> dict:
     """초안에 데이터베이스의 필수 문구가 포함되어 있는지 결정적으로 검사한다."""
 
     requirements = db.find_quality_requirements(scenario)
+    return evaluate_required_terms(draft, scenario, requirements)
+
+
+def evaluate_required_terms(draft: str, scenario: str, requirements: list[dict]) -> dict:
+    """주어진 조건으로 초안을 검사한다. DB와 Mock Fixture에서 공통 사용한다."""
+
+    body = re.sub(r"https?://\S+", "", draft)
+
+    def included(item: dict) -> bool:
+        check_type = item.get("check_type", "literal")
+        if check_type == "emergency_report":
+            return bool(re.search(r"119\s*(?:에|로)?\s*신고", body))
+        if check_type == "literal":
+            return item["required_term"] in body
+        raise ValueError(f"지원하지 않는 검사 유형입니다: {check_type}")
+
     checks = [
         {
             "requirement_key": item["requirement_key"],
             "description": item["description"],
             "required_term": item["required_term"],
-            "included": item["required_term"] in draft,
+            "included": included(item),
         }
         for item in requirements
     ]

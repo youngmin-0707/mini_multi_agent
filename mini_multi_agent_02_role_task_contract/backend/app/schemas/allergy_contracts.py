@@ -11,18 +11,23 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ResearchFact(BaseModel):
-    """Research Agent가 수집한 출처 포함 사실 한 건이다."""
+    """Research Agent가 선택한 가상 장소 사실 한 건이다."""
 
     fact: str = Field(min_length=1)
-    source: str = Field(min_length=1)
 
 
 class SafetyGuidance(BaseModel):
-    """알레르기 안전 행동 지침과 출처를 한 묶음으로 표현한다."""
+    """가상 안내문에 사용할 안전 행동 지침이다."""
 
     guidance: str = Field(min_length=1)
     emergency: bool = False
-    source: str = Field(min_length=1)
+
+
+class FoodSuggestion(BaseModel):
+    """가상 메뉴와 확인이 필요한 원재료 후보를 표현한다."""
+
+    name: str = Field(min_length=1)
+    suspected_ingredients: list[str] = Field(min_length=1)
 
 
 class AllergyResearchResult(BaseModel):
@@ -31,6 +36,9 @@ class AllergyResearchResult(BaseModel):
     agent_id: Literal["allergy_research_agent"] = "allergy_research_agent"
     facts: list[ResearchFact] = Field(default_factory=list, max_length=10)
     safety_guidance: list[SafetyGuidance] = Field(default_factory=list, max_length=10)
+    scenario_title: str = "부산 바다 나들이"
+    food_suggestions: list[FoodSuggestion] = Field(default_factory=list, max_length=4)
+    daytime_caution: str = ""
     completed: bool
 
     @model_validator(mode="after")
@@ -43,11 +51,10 @@ class AllergyResearchResult(BaseModel):
 
 
 class AllergyGuideDraftResult(BaseModel):
-    """Writer Agent가 작성한 안내문과 근거 사용 내역을 표현한다."""
+    """Writer Agent가 작성한 안내문과 반영 조건을 표현한다."""
 
     agent_id: Literal["allergy_guide_writer_agent"] = "allergy_guide_writer_agent"
     draft: str = Field(min_length=1)
-    used_sources: list[str] = Field(min_length=1, max_length=10)
     included_requirements: list[str] = Field(default_factory=list, max_length=10)
     revision: int = Field(ge=1, le=3)
 

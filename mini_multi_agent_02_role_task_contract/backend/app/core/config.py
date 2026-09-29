@@ -8,11 +8,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 class Settings(BaseSettings):
     """환경 변수에서 Backend 실행 설정을 읽는다.
 
-    llm_mode가 mock이면 알레르기 실습 Agent는 외부 LLM을 호출하지 않고
-    결정적인 Fixture를 사용한다. real이면 Agent Profile의 Provider를 호출한다.
+    알레르기 실습 Agent는 항상 결정적인 Fixture를 사용한다.
     """
 
-    llm_mode: str = "mock"
     default_provider: str = "openai"
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"

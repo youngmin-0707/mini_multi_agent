@@ -24,14 +24,13 @@ class AllergyContractTests(unittest.TestCase):
         """세 역할의 정상적인 결과가 모두 계약을 통과한다."""
 
         research = AllergyResearchResult.model_validate({
-            "facts": [{"fact": "부산박물관은 실내 장소다.", "source": "place-source"}],
-            "safety_guidance": [{"guidance": "교차접촉을 확인한다.", "source": "safety-source"}],
+            "facts": [{"fact": "해운대해수욕장은 가상 예시 장소다."}],
+            "safety_guidance": [{"guidance": "교차접촉을 확인한다."}],
             "completed": True,
         })
         draft = AllergyGuideDraftResult.model_validate({
-            "draft": "출처를 확인하고 교차접촉 가능성을 문의한다.",
-            "used_sources": ["place-source", "safety-source"],
-            "included_requirements": ["source", "cross_contact"],
+            "draft": "원재료와 교차접촉 가능성을 문의한다.",
+            "included_requirements": ["suspected_ingredients", "cross_contact"],
             "revision": 1,
         })
         review = AllergyGuideReviewResult.model_validate({

@@ -1,7 +1,8 @@
 # Mini Multi-Agent 02 · Role, Task and Contract
 
 Agent의 역할·Task·입출력 계약과 검증된 결과 전달을 실제 LLM, MCP, PostgreSQL, Redis로
-학습하는 프로젝트입니다. Mock 응답과 JSON Data Source fallback은 사용하지 않습니다.
+학습하는 프로젝트입니다. Lab 12의 알레르기 안내문은 Mock 데이터와 Mock Agent 응답을
+사용하며, 다른 실습은 기존 실제 Data Source 설정을 사용합니다.
 
 ## 01에서 02로 이어지는 내용
 
@@ -332,6 +333,7 @@ Gemini가 `429 RESOURCE_EXHAUSTED`를 반환하면 Agent 결과에
 | POST | `/api/async-runs/{flow_name}` |
 | GET | `/api/async-runs/{run_id}/snapshot` |
 | POST | `/api/runs/support-flow` |
+| POST | `/api/runs/allergy-safety-guide` |
 
 동기 실행 API인 `/api/runs/multi-llm`, `/api/runs/verified-flow`도 제공하지만 화면에서는
 실시간 진행 표시를 위해 비동기 API를 사용합니다.
